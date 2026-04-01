@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/digisan/csv-tool/split2"
+	"github.com/nsip/csv-tool/split2"
 	"github.com/digisan/gotk/track"
 )
 

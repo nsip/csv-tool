@@ -108,7 +108,9 @@ func FileHeaderHasAny(path string, hdr ...string) (bool, error) {
 	return HeaderHasAny(csvFile, hdr...)
 }
 
-// CsvReader : if [f arg: i==-1], it is pure HeaderRow csv
+// CsvReader : streaming row-by-row processing. Malformed rows are skipped with a warning
+// rather than aborting and leaving the output empty. n passed to callback is 0 (unknown
+// ahead of time); callers must not rely on n being accurate.
 func CsvReader(
 	r io.Reader,
 	f func(i, n int, headers, cells []string) (ok bool, hdr, row string),
@@ -122,75 +124,112 @@ func CsvReader(
 		defer rs.Seek(0, io.SeekStart)
 	}
 
-	content, err := csv.NewReader(r).ReadAll()
+	reader := csv.NewReader(r)
+	reader.FieldsPerRecord = -1 // tolerate rows with varying field counts
+
+	// Read header row
+	rawHeader, err := reader.Read()
+	if err == io.EOF {
+		return "", []string{}, fmt.Errorf("FILE_EMPTY")
+	}
 	if err != nil {
 		return "", nil, err
 	}
 
-	if len(content) == 0 {
-		return "", []string{}, fmt.Errorf("FILE_EMPTY")
-	}
-
-	hdrOnly := false
-	if len(content) == 1 {
-		hdrOnly = true
-	}
-
-	headers := make([]string, 0)
-	for i, hdrCell := range content[0] {
-		if hdrCell == "" {
-			hdrCell = fmt.Sprintf("column_%d", i)
-			lk.WarnOnErr("%v: - column[%d] is empty, mark [%s]", fmt.Errorf("CSV_COLUMN_HEADER_EMPTY"), i, hdrCell)
+	headers := make([]string, 0, len(rawHeader))
+	for i, cell := range rawHeader {
+		if cell == "" {
+			cell = fmt.Sprintf("column_%d", i)
+			lk.WarnOnErr("%v: column[%d] is empty, marked [%s]", fmt.Errorf("CSV_COLUMN_HEADER_EMPTY"), i, cell)
 		}
-		headers = append(headers, CellEsc(hdrCell)) // default is original headers
+		headers = append(headers, CellEsc(cell))
 	}
 
-	// Remove The Header Row //
-	content = content[1:]
+	hdrLine := strings.Join(headers, ",")
+	allRows := []string{}
 
-	N := len(content) // N is row's count
-	hdrLine, allRows := "", []string{}
-
-	// if f is NOT provided, we select all rows including headers //
+	// If no callback: collect all rows and write them out
 	if f == nil {
-		if len(content) > 0 || keepOriHdr {
-			hdrLine = strings.Join(headers, ",")
-		}
-		for _, d := range content {
-			allRows = append(allRows, strings.Join(d, ","))
-		}
-		goto SAVE
-	}
-
-	if hdrOnly {
-		if keepOriHdr {
-			hdrLine = strings.Join(headers, ",")
-		}
-		goto SAVE
-	}
-
-	// default hdrLine is original header-line
-	if len(content) > 0 || keepOriHdr {
-		hdrLine = strings.Join(headers, ",")
-	}
-
-	for i, d := range content {
-		if ok, hdr, row := f(i, N, headers, d); ok {
-			if hdr != "" {
-				hdrLine = hdr
+		rowIdx := 0
+		for {
+			rawRow, readErr := reader.Read()
+			if readErr == io.EOF {
+				break
 			}
-			if keepAnyRow {
-				allRows = append(allRows, row)
-			} else {
-				if !isBlank(row) { // we use f to return row content for deciding wether to add this row
+			if readErr != nil {
+				lk.Warn("CSV parse error at row %d: %v — row skipped", rowIdx+2, readErr)
+				rowIdx++
+				continue
+			}
+			allRows = append(allRows, strings.Join(rawRow, ","))
+			rowIdx++
+		}
+		if len(allRows) > 0 || keepOriHdr {
+			// hdrLine already set
+		} else {
+			hdrLine = ""
+		}
+		goto SAVE
+	}
+
+	// Streaming callback processing: write to w as each accepted row arrives.
+	// pendingHdr tracks the latest header value returned by callbacks; it is
+	// written to w just before the first accepted content row, so that Subset's
+	// column-filtered header is captured correctly even if early rows are skipped.
+	{
+		pendingHdr := hdrLine
+		wroteHdr := false
+		rowIdx := 0
+
+		for {
+			rawRow, readErr := reader.Read()
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				lk.Warn("CSV parse error at row %d: %v — row skipped", rowIdx+2, readErr)
+				rowIdx++
+				continue
+			}
+
+			cbOk, hdr, row := f(rowIdx, 0, headers, rawRow)
+			rowIdx++
+
+			if cbOk {
+				if hdr != "" {
+					pendingHdr = hdr
+				}
+
+				if keepAnyRow || !isBlank(row) {
 					allRows = append(allRows, row)
+
+					if !IsNil(w) {
+						if !wroteHdr {
+							if _, werr := fmt.Fprint(w, pendingHdr); werr != nil {
+								return "", nil, werr
+							}
+							wroteHdr = true
+						}
+						if _, werr := fmt.Fprintf(w, "\n%s", row); werr != nil {
+							return "", nil, werr
+						}
+					}
 				}
 			}
 		}
+
+		// Header-only file (no content rows passed the filter but keepOriHdr requested)
+		if !IsNil(w) && !wroteHdr && keepOriHdr {
+			if _, werr := fmt.Fprint(w, pendingHdr); werr != nil {
+				return "", nil, werr
+			}
+		}
+
+		hdrLine = pendingHdr
+		return hdrLine, allRows, nil
 	}
 
 SAVE:
-	// save
 	if !IsNil(w) {
 		data := []byte(strings.TrimSuffix(hdrLine+"\n"+strings.Join(allRows, "\n"), "\n"))
 		_, err = w.Write(data)
@@ -219,7 +258,7 @@ func ScanFile(path string, f func(i, n int, headers, cells []string) (ok bool, h
 
 	if trimBlank(outPath) != "" {
 		fd.MustCreateDir(filepath.Dir(outPath))
-		fw, err = os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE, 0666)
+		fw, err = os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 		if err != nil {
 			return "", nil, err
 		}

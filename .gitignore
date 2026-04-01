@@ -16,3 +16,11 @@
 
 split/cmd/out*/
 split2/cmd/out*/
+
+# generated output & large test data
+out/
+query/out/
+query/subset-out/
+query/subset-out1/
+query/data/
+*.log

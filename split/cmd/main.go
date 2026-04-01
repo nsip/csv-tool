@@ -1,6 +1,6 @@
 package main
 
-import "github.com/digisan/csv-tool/split"
+import "github.com/nsip/csv-tool/split"
 
 func main() {
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	ct "github.com/digisan/csv-tool"
-	qry "github.com/digisan/csv-tool/query"
+	ct "github.com/nsip/csv-tool"
+	qry "github.com/nsip/csv-tool/query"
 	. "github.com/digisan/go-generics"
 	fd "github.com/digisan/gotk/file-dir"
 	lk "github.com/digisan/logkit"

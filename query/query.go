@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	ct "github.com/digisan/csv-tool"
 	. "github.com/digisan/go-generics"
 	fd "github.com/digisan/gotk/file-dir"
+	ct "github.com/nsip/csv-tool"
 )
 
 // GetRepeated : remove repeated cells
@@ -279,37 +279,61 @@ func Query(in []byte, incCol bool, hdrNames []string, R rune, CGrp []Cond, w io.
 
 }
 
-func QueryFile(csv string, incCol bool, hdrNames []string, R rune, CGrp []Cond, out string) error {
+func QueryFile(csvPath string, incCol bool, hdrNames []string, R rune, CGrp []Cond, out string) error {
 
-	// fPf("---querying...<%s>\n", csv)
-
-	if !fd.FileExists(csv) {
-		return fmt.Errorf("[%s] does NOT exist, ignore", csv)
+	if !fd.FileExists(csvPath) {
+		return fmt.Errorf("[%s] does NOT exist, ignore", csvPath)
 	}
 
-	if csv == out {
-		out += ".csv"
-		defer func() {
-			os.Remove(csv)
-			os.Rename(out, csv)
-		}()
+	// When csvPath == out we write to a temp file and rename only on success,
+	// so a query error never destroys the original.
+	actualOut := out
+	usingTemp := csvPath == out
+	if usingTemp {
+		actualOut = out + ".querytmp"
 	}
 
-	in, err := os.ReadFile(csv)
+	fr, err := os.Open(csvPath)
+	if err != nil {
+		return err
+	}
+	defer fr.Close()
+
+	fd.MustCreateDir(filepath.Dir(actualOut))
+
+	// O_TRUNC ensures a pre-existing file is cleared before writing, preventing
+	// stale tail bytes when the new content is shorter than the old content.
+	fw, err := os.OpenFile(actualOut, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		return err
 	}
 
-	fd.MustCreateDir(filepath.Dir(out))
-
-	fw, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		return err
+	in, readErr := io.ReadAll(fr)
+	if readErr != nil {
+		fw.Close()
+		os.Remove(actualOut)
+		return readErr
 	}
-	defer fw.Close()
 
-	_, _, err = Query(in, incCol, hdrNames, R, CGrp, fw)
-	return err
+	_, _, queryErr := Query(in, incCol, hdrNames, R, CGrp, fw)
+	fw.Close() // close before rename
+
+	if queryErr != nil {
+		os.Remove(actualOut) // discard empty/partial output, leave original intact
+		return queryErr
+	}
+
+	if usingTemp {
+		if removeErr := os.Remove(out); removeErr != nil {
+			os.Remove(actualOut)
+			return fmt.Errorf("QueryFile: could not remove original [%s]: %w", out, removeErr)
+		}
+		if renameErr := os.Rename(actualOut, out); renameErr != nil {
+			return fmt.Errorf("QueryFile: could not rename temp to [%s]: %w", out, renameErr)
+		}
+	}
+
+	return nil
 }
 
 // QueryByConfig :

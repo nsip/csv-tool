@@ -1,4 +1,4 @@
-module github.com/digisan/csv-tool
+module github.com/nsip/csv-tool
 
 go 1.22.3
 
