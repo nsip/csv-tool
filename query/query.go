@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	. "github.com/digisan/go-generics"
@@ -154,10 +155,17 @@ func Select(in []byte, R rune, CGrp []Cond, w io.Writer) (string, []string, erro
 	}
 
 	nCGrp := len(CGrp)
+	// Cache the header row string: headers never change between rows, so
+	// computing Map(headers, CellEsc) + strings.Join per row is pure waste.
+	// For a 2.3 M-row file with 50 columns that avoids ~115 M CellEsc calls.
+	cachedHdrRow := ""
 	return ct.Scan(in, func(idx, cnt int, headers, cells []string) (bool, string, string) {
 
-		hdrNames := Map(headers, func(i int, e string) string { return ct.CellEsc(e) })
-		hdrRow := strings.Join(hdrNames, ",")
+		if cachedHdrRow == "" {
+			hdrNames := Map(headers, func(i int, e string) string { return ct.CellEsc(e) })
+			cachedHdrRow = strings.Join(hdrNames, ",")
+		}
+		hdrRow := cachedHdrRow
 
 		if len(cells) == 0 {
 			return true, hdrRow, ""
@@ -286,6 +294,14 @@ func Select(in []byte, R rune, CGrp []Cond, w io.Writer) (string, []string, erro
 // Query : combine Subset(incCol, all rows) & Select
 func Query(in []byte, incCol bool, hdrNames []string, R rune, CGrp []Cond, w io.Writer) (string, []string, error) {
 
+	// When there are no filter conditions, Select would just copy every row
+	// unchanged into an intermediate bytes.Buffer (potentially 500 MB+ for a
+	// large file) before Subset reads it back.  Short-circuit that entirely:
+	// call Subset directly on the original input.
+	if len(CGrp) == 0 {
+		return Subset(in, incCol, hdrNames, false, []int{}, w)
+	}
+
 	b := &bytes.Buffer{}
 	_, _, err := Select(in, R, CGrp, io.Writer(b))
 	if err == nil {
@@ -300,6 +316,8 @@ func QueryFile(csvPath string, incCol bool, hdrNames []string, R rune, CGrp []Co
 	if !fd.FileExists(csvPath) {
 		return fmt.Errorf("[%s] does NOT exist, ignore", csvPath)
 	}
+
+	queryStart := time.Now()
 
 	// When csvPath == out we write to a temp file and rename only on success,
 	// so a query error never destroys the original.
@@ -335,6 +353,8 @@ func QueryFile(csvPath string, incCol bool, hdrNames []string, R rune, CGrp []Co
 		os.Remove(actualOut)
 		return readErr
 	}
+	lk.Log("QueryFile: start  %s  (%.1f MB, %d conditions)",
+		filepath.Base(csvPath), float64(len(in))/(1024*1024), len(CGrp))
 
 	// Wrap fw in a large write buffer so that the per-row fmt.Fprintf calls in
 	// CsvReader's streaming path are coalesced into large chunks rather than
@@ -366,6 +386,7 @@ func QueryFile(csvPath string, incCol bool, hdrNames []string, R rune, CGrp []Co
 		}
 	}
 
+	lk.Log("QueryFile: done   %s  in %v", filepath.Base(csvPath), time.Since(queryStart).Round(time.Millisecond))
 	return nil
 }
 

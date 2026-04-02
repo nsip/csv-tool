@@ -209,7 +209,14 @@ func CsvReader(
 				}
 
 				if keepAnyRow || !isBlank(row) {
-					allRows = append(allRows, row)
+					// Only accumulate allRows when NOT streaming to a writer.
+					// When wNotNil, the caller receives output via w; keeping
+					// 2.3 M row strings in allRows simultaneously doubles the
+					// memory footprint with no benefit — callers such as Query
+					// and QueryFile always discard the returned allRows.
+					if !wNotNil {
+						allRows = append(allRows, row)
+					}
 
 					if wNotNil {
 						if !wroteHdr {
