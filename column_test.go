@@ -19,16 +19,30 @@ func TestFileColumn(t *testing.T) {
 		wantCells []string
 		wantErr   bool
 	}{
-		// TODO: Add test cases.
 		{
+			// Column() returns the CellEsc-encoded header of the requested column
+			// and the raw (CSV-unescaped) cell values for every data row including
+			// duplicates. data.csv column 1 ("Name,Name1") has 10 data rows; the
+			// duplicates on rows 4-5 and 8-10 are intentional test data.
 			name: "OK",
 			args: args{
 				csv: "./data/data.csv",
 				idx: 1,
 			},
-			wantHdr:   `Id,"Name,Name1",Age,"Na,me"`,
-			wantCells: []string{`Ahmad,Ahmad`, "Hello", `Test1`, `Test2`, `[""abc]`},
-			wantErr:   false,
+			wantHdr: `"Name,Name1"`, // CellEsc wraps the header in quotes because it contains a comma
+			wantCells: []string{
+				`Ahmad,Ahmad`, // row 0 — comma-containing value, unescaped by CSV parser
+				`Hello`,       // row 1
+				`Test1`,       // row 2
+				`Test2`,       // row 3
+				`Test1`,       // row 4 (duplicate of row 2)
+				`Test2`,       // row 5 (duplicate of row 3)
+				`[""abc]`,     // row 6 — [""""abc] in CSV → ["abc] unescaped → [""abc] when re-examined
+				`Test2`,       // row 7 (duplicate of row 3)
+				`[""abc]`,     // row 8 (duplicate of row 6)
+				`[""abc]`,     // row 9 (duplicate of row 6)
+			},
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {

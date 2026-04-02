@@ -12,7 +12,7 @@ RelaOfCond = "&"
 
 [[Query.Cond]]
 Header = "School"
-RelaOfItemValue = "="
+RelaOfCellValue = "="
 Value = "21221"
 ValueType = "string"
 
@@ -21,21 +21,21 @@ ValueType = "string"
 # — — — — —  — — — — — — — — — — — — — — — — — — #
 
 [[Query]]
-CsvPath = "./data/itemResults1.csv"
+CsvPath = "./data/itemResults999.csv"
 HdrNames = ["School", "Item Response"]
 IncCol = false
 Name = "Query 2"
-OutCsv = "./out/itemResults1_out.csv"
+OutCsv = "./out/itemResults999_out.csv"
 RelaOfCond = "&"
 
 [[Query.Cond]]
 Header = "Domain"
-RelaOfItemValue = "!="
+RelaOfCellValue = "!="
 Value = "Reading"
 ValueType = "string"
 
 [[Query.Cond]]
 Header = "YrLevel"
-RelaOfItemValue = "<"
+RelaOfCellValue = "<"
 Value = 9
 ValueType = "int"

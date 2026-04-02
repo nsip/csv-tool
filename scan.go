@@ -147,6 +147,13 @@ func CsvReader(
 
 	hdrLine := strings.Join(headers, ",")
 	allRows := []string{}
+	// Pre-compute IsNil(w) once, outside the hot row loop.
+	// IsNil (from go-generics v0.5.4) falls back to fmt.Sprint(v) which
+	// serialises the entire writer struct via reflection on every call.
+	// For a *bufio.Writer with a 1 MiB buffer that means ~1 MB of reflect
+	// work per row: 2.3 M rows × 1 MB ≈ total freeze.
+	// Cache the result here so the loop pays O(1) per row.
+	wNotNil := !IsNil(w)
 
 	// If no callback: collect all rows and write them out
 	if f == nil {
@@ -176,6 +183,7 @@ func CsvReader(
 	// pendingHdr tracks the latest header value returned by callbacks; it is
 	// written to w just before the first accepted content row, so that Subset's
 	// column-filtered header is captured correctly even if early rows are skipped.
+	//
 	{
 		pendingHdr := hdrLine
 		wroteHdr := false
@@ -203,7 +211,7 @@ func CsvReader(
 				if keepAnyRow || !isBlank(row) {
 					allRows = append(allRows, row)
 
-					if !IsNil(w) {
+					if wNotNil {
 						if !wroteHdr {
 							if _, werr := fmt.Fprint(w, pendingHdr); werr != nil {
 								return "", nil, werr
@@ -219,7 +227,7 @@ func CsvReader(
 		}
 
 		// Header-only file (no content rows passed the filter but keepOriHdr requested)
-		if !IsNil(w) && !wroteHdr && keepOriHdr {
+		if wNotNil && !wroteHdr && keepOriHdr {
 			if _, werr := fmt.Fprint(w, pendingHdr); werr != nil {
 				return "", nil, werr
 			}
@@ -230,7 +238,7 @@ func CsvReader(
 	}
 
 SAVE:
-	if !IsNil(w) {
+	if wNotNil {
 		data := []byte(strings.TrimSuffix(hdrLine+"\n"+strings.Join(allRows, "\n"), "\n"))
 		_, err = w.Write(data)
 		if err != nil {

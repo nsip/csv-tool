@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/md5"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/BurntSushi/toml"
 	. "github.com/digisan/go-generics"
 	fd "github.com/digisan/gotk/file-dir"
+	lk "github.com/digisan/logkit"
 	ct "github.com/nsip/csv-tool"
 )
 
@@ -173,6 +175,12 @@ func Select(in []byte, R rune, CGrp []Cond, w io.Writer) (string, []string, erro
 			if I := IdxOf(C.Hdr, headers...); I != -1 {
 				iVal := cells[I]
 
+				if C.Rel == "" {
+					// Empty operator from misconfigured Cond (e.g. wrong TOML key);
+					// skip this condition rather than panic.
+					continue NEXT_CONDITION
+				}
+
 				if C.Rel == "=" {
 					if iVal == C.Val {
 						CResults = append(CResults, struct{}{})
@@ -183,6 +191,11 @@ func Select(in []byte, R rune, CGrp []Cond, w io.Writer) (string, []string, erro
 					if iVal != C.Val {
 						CResults = append(CResults, struct{}{})
 					}
+					continue NEXT_CONDITION
+				}
+
+				// Only numeric operators remain; string values are not valid here.
+				if NotIn(C.Rel, ">", ">=", "<", "<=") {
 					continue NEXT_CONDITION
 				}
 
@@ -239,7 +252,10 @@ func Select(in []byte, R rune, CGrp []Cond, w io.Writer) (string, []string, erro
 					}
 
 				default:
-					panic("comparable type [" + Typ + "] is not supported")
+					// Unrecognised value type: log a warning and skip the condition
+					// rather than panicking, so one bad condition doesn't abort the
+					// whole query.
+					lk.Warn("Select: unsupported comparable type [%s] for header [%s], condition skipped", Typ, C.Hdr)
 				}
 			}
 		}
@@ -299,7 +315,12 @@ func QueryFile(csvPath string, incCol bool, hdrNames []string, R rune, CGrp []Co
 	}
 	defer fr.Close()
 
-	fd.MustCreateDir(filepath.Dir(actualOut))
+	// Use os.MkdirAll directly rather than fd.MustCreateDir. The latter creates
+	// a probe file and removes it, which races when multiple goroutines create
+	// the same directory concurrently (a common pattern in parallel tests).
+	if mkErr := os.MkdirAll(filepath.Dir(actualOut), 0755); mkErr != nil {
+		return fmt.Errorf("QueryFile: could not create output directory [%s]: %w", filepath.Dir(actualOut), mkErr)
+	}
 
 	// O_TRUNC ensures a pre-existing file is cleared before writing, preventing
 	// stale tail bytes when the new content is shorter than the old content.
@@ -315,12 +336,24 @@ func QueryFile(csvPath string, incCol bool, hdrNames []string, R rune, CGrp []Co
 		return readErr
 	}
 
-	_, _, queryErr := Query(in, incCol, hdrNames, R, CGrp, fw)
+	// Wrap fw in a large write buffer so that the per-row fmt.Fprintf calls in
+	// CsvReader's streaming path are coalesced into large chunks rather than
+	// issuing one write(2) syscall per row. For a 531 MB / 2.3 M-row file this
+	// reduces ~2.3 million syscalls to a few hundred, recovering the performance
+	// that was lost when CsvReader moved from a single bulk Write to per-row
+	// fmt.Fprintf calls.
+	bfw := bufio.NewWriterSize(fw, 1<<20) // 1 MiB write buffer
+	_, _, queryErr := Query(in, incCol, hdrNames, R, CGrp, bfw)
+	flushErr := bfw.Flush()
 	fw.Close() // close before rename
 
 	if queryErr != nil {
 		os.Remove(actualOut) // discard empty/partial output, leave original intact
 		return queryErr
+	}
+	if flushErr != nil {
+		os.Remove(actualOut)
+		return fmt.Errorf("QueryFile: flush failed for [%s]: %w", actualOut, flushErr)
 	}
 
 	if usingTemp {
