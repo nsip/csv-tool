@@ -6,7 +6,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/davecgh/go-spew/spew"
-	lk "github.com/digisan/logkit"
+	lk "github.com/nsip/logkit"
 )
 
 func TestQueryConfig(t *testing.T) {

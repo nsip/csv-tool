@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	. "github.com/digisan/go-generics"
-	fd "github.com/digisan/gotk/file-dir"
+	. "github.com/nsip/go-generics"
+	fd "github.com/nsip/gotk/file-dir"
 )
 
 // Create : create csv file with input headers

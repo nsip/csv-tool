@@ -8,8 +8,8 @@ import (
 
 	ct "github.com/nsip/csv-tool"
 	qry "github.com/nsip/csv-tool/query"
-	. "github.com/digisan/go-generics"
-	fd "github.com/digisan/gotk/file-dir"
+	. "github.com/nsip/go-generics"
+	fd "github.com/nsip/gotk/file-dir"
 )
 
 var (

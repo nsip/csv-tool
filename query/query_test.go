@@ -11,10 +11,10 @@ import (
 	"time"
 
 	ct "github.com/nsip/csv-tool"
-	. "github.com/digisan/go-generics"
-	fd "github.com/digisan/gotk/file-dir"
-	"github.com/digisan/gotk/track"
-	lk "github.com/digisan/logkit"
+	. "github.com/nsip/go-generics"
+	fd "github.com/nsip/gotk/file-dir"
+	"github.com/nsip/gotk/track"
+	lk "github.com/nsip/logkit"
 )
 
 func TestSliceEq(t *testing.T) {
