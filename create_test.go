@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	dt "github.com/digisan/gotk/data-type"
+	dt "github.com/nsip/gotk/data-type"
 )
 
 func TestCombine(t *testing.T) {
